@@ -2,6 +2,13 @@
 name = "file-mst"
 version = "0.1.0"
 edition = "2024"
+description = "A Merkle Search Tree implementation backed by a file system."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Le-Maz/file-mst"
+readme = "README.md"
+keywords = ["merkle", "tree", "persistent", "database", "search"]
+categories = ["data-structures", "database", "filesystem"]
+authors = ["Lech Mazur <mazurlech@proton.me>"]
 
 [dependencies]
 blake3 = "1.8"
