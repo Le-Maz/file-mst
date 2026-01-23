@@ -6,13 +6,6 @@ fn generate_key(i: u64) -> Vec<u8> {
     i.to_be_bytes().to_vec()
 }
 
-// Note: Vec<u8> already implements Ord, Clone, Debug, Serialize, Deserialize
-impl MerkleKey for Vec<u8> {
-    fn encode(&self) -> Cow<'_, [u8]> {
-        Cow::Borrowed(self.as_slice())
-    }
-}
-
 /// Helper to populate a tree with `count` items
 fn setup_tree(count: u64) -> MerkleSearchTree<Vec<u8>> {
     let mut tree = MerkleSearchTree::new_temporary().unwrap();

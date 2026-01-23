@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 #![feature(test)]
 
 extern crate test;
@@ -21,6 +22,19 @@ const PAGE_SIZE: u64 = 4096;
 /// A trait for types that can serve as keys in a Merkle Search Tree.
 pub trait MerkleKey: Ord + Clone + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {
     fn encode(&self) -> Cow<'_, [u8]>;
+}
+
+impl MerkleKey for String {
+    #[inline]
+    fn encode(&self) -> Cow<'_, [u8]> {
+        self.as_bytes().into()
+    }
+}
+
+impl MerkleKey for Vec<u8> {
+    fn encode(&self) -> Cow<'_, [u8]> {
+        self.as_slice().into()
+    }
 }
 
 pub type Hash = [u8; 32];
