@@ -167,6 +167,7 @@ fn exhaustive_deletion() -> io::Result<()> {
         tree.remove(&keys[i])?;
     }
 
+    #[expect(clippy::needless_range_loop)]
     for i in 0..count {
         let exists = tree.contains(&keys[i])?;
         if i % 2 == 0 {
@@ -191,13 +192,10 @@ fn exhaustive_deletion() -> io::Result<()> {
         tree.remove(k)?;
     }
 
-    assert!(!tree.contains(&String::from("key-0001"))?);
+    assert!(!tree.contains("key-0001")?);
 
     tree.insert(String::from("resurrected"), "alive".to_string())?;
-    assert_eq!(
-        tree.get(&String::from("resurrected"))?,
-        Some("alive".to_string())
-    );
+    assert_eq!(tree.get("resurrected")?, Some("alive".to_string()));
 
     Ok(())
 }
@@ -243,23 +241,23 @@ fn interleaved_operations() -> io::Result<()> {
 #[test]
 fn boundary_deletions() -> io::Result<()> {
     let mut tree = MerkleSearchTree::new_temporary()?;
-    let keys = vec!["A".to_string(), "M".to_string(), "Z".to_string()];
+    let keys = vec!["A", "M", "Z"];
 
-    for k in &keys {
-        tree.insert(k.clone(), 1)?;
+    for &k in &keys {
+        tree.insert(String::from(k), 1)?;
     }
 
-    tree.remove(&"M".to_string())?;
-    assert!(tree.contains(&"A".to_string())?);
-    assert!(tree.contains(&"Z".to_string())?);
-    assert!(!tree.contains(&"M".to_string())?);
+    tree.remove("M")?;
+    assert!(tree.contains("A")?);
+    assert!(tree.contains("Z")?);
+    assert!(!tree.contains("M")?);
 
-    tree.remove(&"A".to_string())?;
-    assert!(!tree.contains(&"A".to_string())?);
-    assert!(tree.contains(&"Z".to_string())?);
+    tree.remove("A")?;
+    assert!(!tree.contains("A")?);
+    assert!(tree.contains("Z")?);
 
-    tree.remove(&"Z".to_string())?;
-    assert!(!tree.contains(&"Z".to_string())?);
+    tree.remove("Z")?;
+    assert!(!tree.contains("Z")?);
 
     Ok(())
 }

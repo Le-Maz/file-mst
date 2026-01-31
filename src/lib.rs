@@ -8,7 +8,7 @@ mod benches;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -100,19 +100,31 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
     }
 
     /// Checks if a key exists in the tree.
-    pub fn contains(&self, key: &K) -> io::Result<bool> {
+    pub fn contains<Q>(&self, key: &Q) -> io::Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let root = self.resolve_link(&self.root)?;
         root.contains(key, &self.store)
     }
 
     /// Retrieves a value by key. Returns None if the key does not exist.
-    pub fn get(&self, key: &K) -> io::Result<Option<V>> {
+    pub fn get<Q>(&self, key: &Q) -> io::Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let root = self.resolve_link(&self.root)?;
         root.get(key, &self.store)
     }
 
     /// Removes a key from the tree.
-    pub fn remove(&mut self, key: &K) -> io::Result<()> {
+    pub fn remove<Q>(&mut self, key: &Q) -> io::Result<()>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         let root = self.resolve_link(&self.root)?;
 
         let (new_root, deleted) = root.delete(key, &self.store)?;
@@ -217,6 +229,7 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(path)?;
 
         Ok(Self::new(file))
@@ -400,8 +413,15 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         self.hash = *h.finalize().as_bytes();
     }
 
-    fn contains(&self, key: &K, store: &Store<K, V>) -> io::Result<bool> {
-        match self.keys.binary_search_by(|probe| probe.as_ref().cmp(key)) {
+    fn contains<Q>(&self, key: &Q, store: &Store<K, V>) -> io::Result<bool>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        match self
+            .keys
+            .binary_search_by(|probe| probe.as_ref().borrow().cmp(key))
+        {
             Ok(_) => Ok(true),
             Err(idx) => {
                 if self.children.is_empty() {
@@ -416,8 +436,15 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         }
     }
 
-    fn get(&self, key: &K, store: &Store<K, V>) -> io::Result<Option<V>> {
-        match self.keys.binary_search_by(|probe| probe.as_ref().cmp(key)) {
+    fn get<Q>(&self, key: &Q, store: &Store<K, V>) -> io::Result<Option<V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        match self
+            .keys
+            .binary_search_by(|probe| probe.as_ref().borrow().cmp(key))
+        {
             Ok(idx) => Ok(Some(self.values[idx].clone())),
             Err(idx) => {
                 if self.children.is_empty() {
@@ -440,7 +467,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         store: &Arc<Store<K, V>>,
     ) -> io::Result<Arc<Node<K, V>>> {
         if key_level > self.level {
-            let (left_child, right_child) = self.split(&key, store)?;
+            let [left_child, right_child] = self.split(&key, store)?;
             let mut new_node = Node {
                 level: key_level,
                 keys: vec![key],
@@ -474,7 +501,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
                         Arc::new(Node::empty(self.level.saturating_sub(1)))
                     };
 
-                    let (left_sub, right_sub) = child_to_split.split(&key, store)?;
+                    let [left_sub, right_sub] = child_to_split.split(&key, store)?;
                     new_node.keys.insert(idx, key);
                     new_node.values.insert(idx, value);
 
@@ -530,16 +557,9 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         Ok(Arc::new(new_node))
     }
 
-    fn split(
-        &self,
-        split_key: &K,
-        store: &Arc<Store<K, V>>,
-    ) -> io::Result<(Arc<Node<K, V>>, Arc<Node<K, V>>)> {
+    fn split(&self, split_key: &K, store: &Arc<Store<K, V>>) -> io::Result<[Arc<Node<K, V>>; 2]> {
         if self.keys.is_empty() && self.children.is_empty() {
-            return Ok((
-                Arc::new(Node::empty(self.level)),
-                Arc::new(Node::empty(self.level)),
-            ));
+            return Ok(std::array::from_fn(|_| Arc::new(Node::empty(self.level))));
         }
 
         let idx = match self
@@ -561,14 +581,14 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         let right_keys = self.keys[right_start..].to_vec();
         let right_values = self.values[right_start..].to_vec();
 
-        let (mid_left, mid_right) = if idx < self.children.len() {
+        let [mid_left, mid_right] = if idx < self.children.len() {
             let child = match &self.children[idx] {
                 Link::Loaded(n) => n.clone(),
                 Link::Disk { offset, .. } => store.load_node(*offset)?,
             };
             child.split(split_key, store)?
         } else {
-            (Arc::new(Node::empty(0)), Arc::new(Node::empty(0)))
+            std::array::from_fn(|_| Arc::new(Node::empty(0)))
         };
 
         let mut left_children = self.children[..idx].to_vec();
@@ -595,11 +615,18 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         };
         right_node.rehash();
 
-        Ok((Arc::new(left_node), Arc::new(right_node)))
+        Ok([left_node, right_node].map(Arc::new))
     }
 
-    fn delete(&self, key: &K, store: &Arc<Store<K, V>>) -> io::Result<(Arc<Node<K, V>>, bool)> {
-        match self.keys.binary_search_by(|probe| probe.as_ref().cmp(key)) {
+    fn delete<Q>(&self, key: &Q, store: &Arc<Store<K, V>>) -> io::Result<(Arc<Node<K, V>>, bool)>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        match self
+            .keys
+            .binary_search_by(|probe| probe.as_ref().borrow().cmp(key))
+        {
             Ok(idx) => {
                 let mut new_node = self.clone();
                 new_node.keys.remove(idx);
@@ -693,10 +720,10 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
 
         let merged_boundary = Node::merge(left_boundary_child, right_boundary_child, store)?;
 
-        new_node.keys.extend(right_clone.keys.into_iter());
-        new_node.values.extend(right_clone.values.into_iter());
+        new_node.keys.extend(right_clone.keys);
+        new_node.values.extend(right_clone.values);
         new_node.children.push(merged_boundary);
-        new_node.children.extend(right_clone.children.into_iter());
+        new_node.children.extend(right_clone.children);
         new_node.rehash();
 
         Ok(Link::Loaded(Arc::new(new_node)))
