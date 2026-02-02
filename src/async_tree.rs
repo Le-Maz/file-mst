@@ -46,6 +46,18 @@ where
     tx: SyncSender<Command<K, V>>,
 }
 
+impl<K, V> Clone for AsyncMerkleSearchTree<K, V>
+where
+    K: MerkleKey + Send + Sync + 'static,
+    V: MerkleValue + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
 impl<K, V> From<MerkleSearchTree<K, V>> for AsyncMerkleSearchTree<K, V>
 where
     K: MerkleKey + Send + Sync + 'static,
