@@ -17,7 +17,6 @@ pub use tree::MerkleSearchTree;
 
 use serde::{Deserialize, Serialize};
 
-pub type Hash = [u8; 32];
 pub(crate) type NodeId = u64;
 pub(crate) const PAGE_SIZE: u64 = 4096;
 

@@ -1,5 +1,7 @@
+use blake3::{Hash, OUT_LEN};
+
 use crate::{
-    Hash, MerkleKey, MerkleValue, NodeId, PAGE_SIZE,
+    MerkleKey, MerkleValue, NodeId, PAGE_SIZE,
     node::{DiskNode, Node},
 };
 use std::collections::HashMap;
@@ -40,7 +42,7 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
         writer.seek(SeekFrom::Start(0))?;
 
         writer.write_all(&root_offset.to_le_bytes())?;
-        writer.write_all(&root_hash)?;
+        writer.write_all(root_hash.as_bytes())?;
         Ok(())
     }
 
@@ -57,10 +59,10 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
             return Ok(None);
         }
 
-        let mut hash = [0u8; 32];
+        let mut hash = [0u8; OUT_LEN];
         file.read_exact(&mut hash)?;
 
-        Ok(Some((offset, hash)))
+        Ok(Some((offset, Hash::from_bytes(hash))))
     }
 
     pub(crate) fn flush(&self) -> io::Result<()> {

@@ -1,4 +1,5 @@
-use crate::{Hash, MerkleKey, MerkleValue, NodeId, store::Store};
+use crate::{MerkleKey, MerkleValue, NodeId, store::Store};
+use blake3::{Hash, OUT_LEN};
 use serde::{Deserialize, Serialize};
 use std::{borrow::Borrow, io, sync::Arc};
 
@@ -75,7 +76,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
             keys: Vec::new(),
             values: Vec::new(),
             children: Vec::new(),
-            hash: [0u8; 32],
+            hash: Hash::from_bytes([0u8; OUT_LEN]),
         };
         node.rehash();
         node
@@ -144,7 +145,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
 
     fn rehash(&mut self) {
         if self.keys.is_empty() && self.children.is_empty() {
-            self.hash = [0u8; 32];
+            self.hash = Hash::from_bytes([0u8; OUT_LEN]);
             return;
         }
 
@@ -153,7 +154,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         h.update(&(self.keys.len() as u64).to_le_bytes());
 
         for (i, child) in self.children.iter().enumerate() {
-            h.update(&child.hash());
+            h.update(child.hash().as_bytes());
             if i < self.keys.len() {
                 let k_bytes = postcard::to_extend(&self.keys[i], Vec::new())
                     .expect("Failed to serialize key for rehash");
@@ -166,7 +167,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
                 h.update(&v_bytes);
             }
         }
-        self.hash = *h.finalize().as_bytes();
+        self.hash = h.finalize();
     }
 
     pub(crate) fn contains<Q>(&self, key: &Q, store: &Store<K, V>) -> io::Result<bool>
@@ -229,7 +230,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
                 keys: vec![key],
                 values: vec![value],
                 children: vec![Link::Loaded(left_child), Link::Loaded(right_child)],
-                hash: [0u8; 32],
+                hash: Hash::from_bytes([0u8; OUT_LEN]),
             };
             new_node.rehash();
             return Ok(Arc::new(new_node));
@@ -282,7 +283,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
                     Link::Loaded(Arc::new(Node::empty(0))),
                     Link::Loaded(Arc::new(Node::empty(0))),
                 ],
-                hash: [0u8; 32],
+                hash: Hash::from_bytes([0u8; OUT_LEN]),
             };
             new_node.rehash();
             return Ok(Arc::new(new_node));
@@ -353,7 +354,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
             keys: left_keys,
             values: left_values,
             children: left_children,
-            hash: [0u8; 32],
+            hash: Hash::from_bytes([0u8; OUT_LEN]),
         };
         left_node.rehash();
 
@@ -366,7 +367,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
             keys: right_keys,
             values: right_values,
             children: right_children,
-            hash: [0u8; 32],
+            hash: Hash::from_bytes([0u8; OUT_LEN]),
         };
         right_node.rehash();
 

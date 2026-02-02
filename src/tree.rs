@@ -1,6 +1,8 @@
+use blake3::Hash;
+
 use crate::node::{Link, Node};
 use crate::store::Store;
-use crate::{Hash, MerkleKey, MerkleValue, NodeId};
+use crate::{MerkleKey, MerkleValue, NodeId};
 use std::borrow::Borrow;
 use std::io;
 use std::path::Path;
