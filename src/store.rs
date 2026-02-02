@@ -67,7 +67,8 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
 
     pub(crate) fn flush(&self) -> io::Result<()> {
         let mut writer = self.file.write().unwrap();
-        writer.flush()
+        writer.flush()?; // Flushes Rust buffer to OS
+        writer.get_ref().sync_all() // Flushes OS buffer to Disk
     }
 
     pub(crate) fn load_node(&self, offset: NodeId) -> io::Result<Arc<Node<K, V>>> {
