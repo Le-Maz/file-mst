@@ -12,6 +12,7 @@ use std::sync::Arc;
 pub struct MerkleSearchTree<K: MerkleKey, V: MerkleValue> {
     pub(crate) root: Link<K, V>,
     pub(crate) store: Arc<Store<K, V>>,
+    last_committed: Option<(u64, Hash)>,
 }
 
 impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
@@ -21,19 +22,39 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
             Ok(Self {
                 root: Link::Disk { offset, hash },
                 store,
+                last_committed: Some((offset, hash)),
             })
         } else {
             Ok(Self {
                 root: Link::Loaded(Arc::new(Node::empty(0))),
                 store,
+                last_committed: None,
             })
         }
     }
 
     pub fn commit(&mut self) -> io::Result<(u64, Hash)> {
-        let (offset, hash) = self.flush()?;
+        // 1. Flush the nodes (recursive)
+        // If no changes, this returns the existing Disk offset/hash instantly.
+        let (offset, hash) = self.flush_recursive(&self.root)?;
+
+        // 2. Did anything actually change?
+        if let Some((last_off, last_hash)) = self.last_committed
+            && last_off == offset
+            && last_hash == hash
+        {
+            // Nothing changed. Return early.
+            return Ok((offset, hash));
+        }
+
+        // 3. Write metadata and sync
         self.store.write_metadata(offset, hash)?;
         self.store.flush()?;
+        self.root = Link::Disk { offset, hash };
+
+        // 4. Update tracker
+        self.last_committed = Some((offset, hash));
+
         Ok((offset, hash))
     }
 
@@ -45,6 +66,7 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
         Ok(Self {
             root: Link::Loaded(Arc::new(Node::empty(0))),
             store,
+            last_committed: None,
         })
     }
 
@@ -103,13 +125,6 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
         }
 
         Ok(())
-    }
-
-    fn flush(&mut self) -> io::Result<(u64, Hash)> {
-        let (offset, hash) = self.flush_recursive(&self.root)?;
-        self.store.flush()?;
-        self.root = Link::Disk { offset, hash };
-        Ok((offset, hash))
     }
 
     pub fn root_hash(&self) -> Hash {
