@@ -489,4 +489,3 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         Ok(Link::Loaded(Arc::new(new_node)))
     }
 }
-// ... (Include from_disk, as_disk_ref, rehash, and calc_level here)
