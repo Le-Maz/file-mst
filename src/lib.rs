@@ -12,8 +12,10 @@ mod tests;
 mod node;
 mod store;
 mod tree;
+mod async_tree;
 
 pub use tree::MerkleSearchTree;
+pub use async_tree::AsyncMerkleSearchTree;
 
 use serde::{Deserialize, Serialize};
 
