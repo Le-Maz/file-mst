@@ -1,9 +1,8 @@
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::{MerkleKey, MerkleSearchTree, MerkleValue};
 use blake3::Hash;
@@ -43,7 +42,7 @@ where
     K: MerkleKey + Send + Sync + 'static,
     V: MerkleValue + Send + Sync + 'static,
 {
-    tx: SyncSender<Command<K, V>>,
+    tx: mpsc::Sender<Command<K, V>>,
 }
 
 impl<K, V> Clone for AsyncMerkleSearchTree<K, V>
@@ -64,10 +63,10 @@ where
     V: MerkleValue + Send + Sync + 'static,
 {
     fn from(mut tree: MerkleSearchTree<K, V>) -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Command<K, V>>(512);
+        let (tx, mut rx) = mpsc::channel::<Command<K, V>>(128);
 
         thread::spawn(move || {
-            for cmd in rx {
+            while let Some(cmd) = rx.blocking_recv() {
                 match cmd {
                     Command::Insert { key, value, resp } => {
                         let _ = resp.send(tree.insert(key, value));
@@ -110,15 +109,11 @@ where
     }
 
     /// Helper to try sending a command to the worker and convert errors to io::Result
-    fn try_send(&self, cmd: Command<K, V>) -> io::Result<()> {
-        self.tx.try_send(cmd).map_err(|e| match e {
-            TrySendError::Full(_) => {
-                io::Error::new(io::ErrorKind::ResourceBusy, "Worker queue full")
-            }
-            TrySendError::Disconnected(_) => {
-                io::Error::new(io::ErrorKind::BrokenPipe, "Worker thread disconnected")
-            }
-        })
+    async fn try_send(&self, cmd: Command<K, V>) -> io::Result<()> {
+        self.tx
+            .send(cmd)
+            .await
+            .map_err(|error| io::Error::new(io::ErrorKind::BrokenPipe, error))
     }
 
     pub async fn insert(&self, key: K, value: V) -> io::Result<()> {
@@ -127,31 +122,34 @@ where
             key,
             value,
             resp: resp_tx,
-        })?;
+        })
+        .await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
     pub async fn remove(&self, key: K) -> io::Result<()> {
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.try_send(Command::Remove { key, resp: resp_tx })?;
+        self.try_send(Command::Remove { key, resp: resp_tx })
+            .await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
     pub async fn get(&self, key: K) -> io::Result<Option<Arc<V>>> {
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.try_send(Command::Get { key, resp: resp_tx })?;
+        self.try_send(Command::Get { key, resp: resp_tx }).await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
     pub async fn contains(&self, key: K) -> io::Result<bool> {
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.try_send(Command::Contains { key, resp: resp_tx })?;
+        self.try_send(Command::Contains { key, resp: resp_tx })
+            .await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
     pub async fn commit(&self) -> io::Result<(u64, Hash)> {
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.try_send(Command::Commit { resp: resp_tx })?;
+        self.try_send(Command::Commit { resp: resp_tx }).await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
@@ -160,7 +158,8 @@ where
         self.try_send(Command::Compact {
             path,
             resp: resp_tx,
-        })?;
+        })
+        .await?;
         resp_rx.await.map_err(Self::on_oneshot_error).flatten()
     }
 
