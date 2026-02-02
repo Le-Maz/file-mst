@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::io;
+
 use super::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
