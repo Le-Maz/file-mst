@@ -1,6 +1,6 @@
 use crate::{
-    MerkleKey, MerkleValue, NodeId, PAGE_SIZE,
-    node::{DiskNode,  Node},
+    Hash, MerkleKey, MerkleValue, NodeId, PAGE_SIZE,
+    node::{DiskNode, Node},
 };
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -20,7 +20,6 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
             cache: RwLock::new(HashMap::new()),
         })
     }
-
     pub(crate) fn open<P: AsRef<Path>>(path: P) -> io::Result<Arc<Self>> {
         let file = OpenOptions::new()
             .read(true)
@@ -29,7 +28,39 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
             .truncate(false)
             .open(path)?;
 
+        if file.metadata()?.len() == 0 {
+            file.set_len(PAGE_SIZE)?;
+        }
+
         Ok(Self::new(file))
+    }
+
+    pub(crate) fn write_metadata(&self, root_offset: u64, root_hash: Hash) -> io::Result<()> {
+        let mut writer = self.file.write().unwrap();
+        writer.seek(SeekFrom::Start(0))?;
+
+        writer.write_all(&root_offset.to_le_bytes())?;
+        writer.write_all(&root_hash)?;
+        Ok(())
+    }
+
+    pub(crate) fn read_metadata(&self) -> io::Result<Option<(u64, Hash)>> {
+        let mut writer_guard = self.file.write().unwrap();
+        let file = writer_guard.get_mut();
+        file.seek(SeekFrom::Start(0))?;
+
+        let mut offset_buf = [0u8; 8];
+        file.read_exact(&mut offset_buf)?;
+        let offset = u64::from_le_bytes(offset_buf);
+
+        if offset == 0 {
+            return Ok(None);
+        }
+
+        let mut hash = [0u8; 32];
+        file.read_exact(&mut hash)?;
+
+        Ok(Some((offset, hash)))
     }
 
     pub(crate) fn flush(&self) -> io::Result<()> {

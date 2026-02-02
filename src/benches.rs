@@ -117,9 +117,9 @@ fn root_hash(b: &mut Bencher) {
 #[bench]
 fn flush_no_changes(b: &mut Bencher) {
     let mut tree = setup_tree(1_000);
-    tree.flush().unwrap();
+    tree.commit().unwrap();
 
     b.iter(|| {
-        test::black_box(tree.flush()).unwrap();
+        test::black_box(tree.commit()).unwrap();
     });
 }

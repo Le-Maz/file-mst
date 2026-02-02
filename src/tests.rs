@@ -29,7 +29,7 @@ fn insert_and_contains_basic() {
     let mut tree = MerkleSearchTree::new_temporary().unwrap();
     tree.insert(String::from("A"), "ValA".to_string()).unwrap();
     assert!(tree.contains(&String::from("A")).unwrap());
-    
+
     // Fix: dereference the Arc to compare values
     assert_eq!(
         tree.get(&String::from("A")).unwrap().as_deref(),
@@ -129,31 +129,19 @@ fn large_scale_persistence() {
         for (i, k) in keys.iter().enumerate() {
             tree.insert(k.clone(), i as i32).unwrap();
         }
-
-        let (root_offset, root_hash) = tree.flush().unwrap();
-        assert_ne!(root_hash, [0u8; 32]);
-
-        std::fs::write(
-            path.with_extension("meta"),
-            format!("{} {}", root_offset, hex::encode(root_hash)),
-        )
-        .unwrap();
+        tree.commit().unwrap();
     }
 
-    let meta = std::fs::read_to_string(path.with_extension("meta")).unwrap();
-    let parts: Vec<&str> = meta.split_whitespace().collect();
-    let offset: u64 = parts[0].parse().unwrap();
-    let hash_bytes = hex::decode(parts[1]).unwrap();
-    let mut root_hash = [0u8; 32];
-    root_hash.copy_from_slice(&hash_bytes);
-
-    let loaded_tree: MerkleSearchTree<String, i32> =
-        MerkleSearchTree::load_from_root(&path, offset, root_hash).unwrap();
+    let loaded_tree: MerkleSearchTree<String, i32> = MerkleSearchTree::open(&path).unwrap();
 
     for (i, k) in keys.iter().enumerate() {
         let val = loaded_tree.get(k).unwrap();
-        // Fix: Compare Option<&i32> with Option<&i32>
-        assert_eq!(val.as_deref(), Some(&(i as i32)), "Incorrect value for key {}", k);
+        assert_eq!(
+            val.as_deref(),
+            Some(&(i as i32)),
+            "Incorrect value for key {}",
+            k
+        );
     }
     assert!(!loaded_tree.contains(&String::from("non-existent")).unwrap());
 }
@@ -180,7 +168,6 @@ fn exhaustive_deletion() -> io::Result<()> {
             assert!(!exists, "Deleted key {} still exists", i);
         } else {
             assert!(exists, "Key {} should still exist", i);
-            // Fix: handle Arc return
             assert_eq!(tree.get(&keys[i])?.as_deref(), Some(&keys[i]));
         }
     }
@@ -202,7 +189,10 @@ fn exhaustive_deletion() -> io::Result<()> {
     assert!(!tree.contains("key-0001")?);
 
     tree.insert(String::from("resurrected"), "alive".to_string())?;
-    assert_eq!(tree.get("resurrected")?.as_deref(), Some(&"alive".to_string()));
+    assert_eq!(
+        tree.get("resurrected")?.as_deref(),
+        Some(&"alive".to_string())
+    );
 
     Ok(())
 }
@@ -234,7 +224,7 @@ fn interleaved_operations() -> io::Result<()> {
         }
 
         if i % 100 == 0 {
-            tree.flush()?;
+            tree.commit()?;
         }
     }
 

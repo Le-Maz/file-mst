@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use crate::node::{Link, Node};
+use crate::store::Store;
+use crate::{Hash, MerkleKey, MerkleValue, NodeId};
+use std::borrow::Borrow;
 use std::io;
 use std::path::Path;
-use std::borrow::Borrow;
-use crate::{MerkleKey, MerkleValue, Hash, NodeId};
-use crate::node::{Node, Link};
-use crate::store::Store;
+use std::sync::Arc;
 
 pub struct MerkleSearchTree<K: MerkleKey, V: MerkleValue> {
     pub(crate) root: Link<K, V>,
@@ -14,10 +14,24 @@ pub struct MerkleSearchTree<K: MerkleKey, V: MerkleValue> {
 impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
     pub fn open<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let store = Store::open(path)?;
-        Ok(Self {
-            root: Link::Loaded(Arc::new(Node::empty(0))),
-            store,
-        })
+        if let Some((offset, hash)) = store.read_metadata()? {
+            Ok(Self {
+                root: Link::Disk { offset, hash },
+                store,
+            })
+        } else {
+            Ok(Self {
+                root: Link::Loaded(Arc::new(Node::empty(0))),
+                store,
+            })
+        }
+    }
+
+    pub fn commit(&mut self) -> io::Result<(u64, Hash)> {
+        let (offset, hash) = self.flush()?;
+        self.store.write_metadata(offset, hash)?;
+        self.store.flush()?;
+        Ok((offset, hash))
     }
 
     /// Creates a new MST backed by a temporary file.
@@ -27,22 +41,6 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
 
         Ok(Self {
             root: Link::Loaded(Arc::new(Node::empty(0))),
-            store,
-        })
-    }
-
-    /// Loads a tree from a known root offset and hash.
-    pub fn load_from_root<P: AsRef<Path>>(
-        path: P,
-        root_offset: u64,
-        root_hash: Hash,
-    ) -> io::Result<Self> {
-        let store = Store::open(path)?;
-        Ok(Self {
-            root: Link::Disk {
-                offset: root_offset,
-                hash: root_hash,
-            },
             store,
         })
     }
@@ -104,7 +102,7 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
         Ok(())
     }
 
-    pub fn flush(&mut self) -> io::Result<(u64, Hash)> {
+    fn flush(&mut self) -> io::Result<(u64, Hash)> {
         let (offset, hash) = self.flush_recursive(&self.root)?;
         self.store.flush()?;
         self.root = Link::Disk { offset, hash };
