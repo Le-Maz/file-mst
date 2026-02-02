@@ -4,6 +4,7 @@ use crate::node::{Link, Node};
 use crate::store::Store;
 use crate::{MerkleKey, MerkleValue, NodeId};
 use std::borrow::Borrow;
+use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
@@ -154,5 +155,87 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
                 Ok((offset, new_node.hash))
             }
         }
+    }
+
+    /// Compacts the database by copying all reachable nodes to a new file,
+    /// eliminating obsolete data and reducing file size.
+    ///
+    /// This operation effectively "defragments" the storage.
+    pub fn compact<P: AsRef<Path>>(&mut self, new_path: P) -> io::Result<()> {
+        // 1. Prepare the new file (Truncate ensures it starts empty)
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&new_path)?;
+
+        // Ensure minimum file size for metadata (matching Store::open logic)
+        if file.metadata()?.len() == 0 {
+            file.set_len(crate::PAGE_SIZE)?;
+        }
+
+        let new_store = Store::new(file);
+
+        // 2. Recursively copy the tree from the old store to the new store.
+        // This returns the offset of the root in the NEW file.
+        let (new_root_offset, new_root_hash) = self.copy_recursive(&self.root, &new_store)?;
+
+        // 3. Write the metadata (Root pointer) to the new store
+        new_store.write_metadata(new_root_offset, new_root_hash)?;
+        new_store.flush()?;
+
+        // 4. Atomically swap the store in memory
+        self.store = new_store;
+
+        // Update the root link to point to the new disk location
+        self.root = Link::Disk {
+            offset: new_root_offset,
+            hash: new_root_hash,
+        };
+
+        Ok(())
+    }
+
+    /// Helper: Recursively loads a node from the old store and writes it to the new store.
+    /// Returns the (Offset, Hash) in the new store.
+    fn copy_recursive(
+        &self,
+        link: &Link<K, V>,
+        new_store: &Arc<Store<K, V>>,
+    ) -> io::Result<(NodeId, Hash)> {
+        // Step A: Resolve the node.
+        // If it's on disk, load it from `self.store` (the old store).
+        // If it's loaded, use it directly.
+        let node = match link {
+            Link::Loaded(n) => n.clone(),
+            Link::Disk { offset, .. } => self.store.load_node(*offset)?,
+        };
+
+        // Step B: Recursively process all children first (Bottom-Up).
+        // We need to write children first so we know their NEW offsets to put in the parent.
+        let mut new_children_links = Vec::with_capacity(node.children.len());
+
+        for child_link in &node.children {
+            let (child_new_offset, child_hash) = self.copy_recursive(child_link, new_store)?;
+
+            // The parent must refer to the child by its NEW disk location.
+            new_children_links.push(Link::Disk {
+                offset: child_new_offset,
+                hash: child_hash,
+            });
+        }
+
+        // Step C: Construct the new node version.
+        // We assume the node content (keys/values) is the same, so the Hash is unchanged.
+        // However, we MUST replace the `children` list with the `Link::Disk` variants pointing to the new file.
+        let mut new_node = (*node).clone();
+        new_node.children = new_children_links;
+
+        // Step D: Write the node to the new store.
+        // Since `new_node` now contains only Link::Disk children, `as_disk_ref` inside `write_node` will succeed.
+        let new_offset = new_store.write_node(&new_node)?;
+
+        Ok((new_offset, new_node.hash))
     }
 }

@@ -30,7 +30,6 @@ fn insert_and_contains_basic() {
     tree.insert(String::from("A"), "ValA".to_string()).unwrap();
     assert!(tree.contains(&String::from("A")).unwrap());
 
-    // Fix: dereference the Arc to compare values
     assert_eq!(
         tree.get(&String::from("A")).unwrap().as_deref(),
         Some(&"ValA".to_string())
@@ -257,4 +256,79 @@ fn boundary_deletions() -> io::Result<()> {
     assert!(!tree.contains("Z")?);
 
     Ok(())
+}
+
+#[test]
+fn compaction_reduces_file_size_and_preserves_data() {
+    use std::fs;
+
+    // 1. Setup paths using a temporary directory so we can control filenames
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("original.mst");
+    let compacted_path = dir.path().join("compacted.mst");
+
+    // 2. Create a persistent tree
+    let mut tree = MerkleSearchTree::open(&db_path).unwrap();
+    let count = 2000;
+
+    // 3. Fill the tree (Initial State)
+    for i in 0..count {
+        tree.insert(format!("key-{:04}", i), "original-value".to_string()).unwrap();
+    }
+    tree.commit().unwrap();
+    
+    let size_after_insert = fs::metadata(&db_path).unwrap().len();
+
+    // 4. Create Fragmentation (Garbage)
+    // Update the first 500 keys (orphans old nodes)
+    for i in 0..500 {
+        tree.insert(format!("key-{:04}", i), "updated-value".to_string()).unwrap();
+    }
+    // Delete the next 500 keys (orphans old nodes)
+    for i in 500..1000 {
+        tree.remove(&format!("key-{:04}", i)).unwrap();
+    }
+    
+    // Commit to flush changes to disk
+    tree.commit().unwrap();
+
+    let fragmented_size = fs::metadata(&db_path).unwrap().len();
+    assert!(
+        fragmented_size > size_after_insert, 
+        "File should grow after updates/deletes in append-only store"
+    );
+
+    // 5. Perform Compaction
+    // This assumes you implemented the `compact` method from the previous step
+    tree.compact(&compacted_path).unwrap();
+
+    let compacted_size = fs::metadata(&compacted_path).unwrap().len();
+
+    // 6. Verify File Size Reduction
+    println!("Fragmented Size: {} bytes", fragmented_size);
+    println!("Compacted Size:  {} bytes", compacted_size);
+    
+    assert!(
+        compacted_size < fragmented_size, 
+        "Compaction failed to reduce file size (Fragmented: {}, Compacted: {})",
+        fragmented_size, compacted_size
+    );
+
+    // 7. Verify Data Integrity
+    // Check updated keys
+    for i in 0..500 {
+        let val = tree.get(&format!("key-{:04}", i)).unwrap();
+        assert_eq!(val.as_deref(), Some(&"updated-value".to_string()));
+    }
+
+    // Check deleted keys
+    for i in 500..1000 {
+        assert!(!tree.contains(&format!("key-{:04}", i)).unwrap());
+    }
+
+    // Check untouched keys
+    for i in 1000..count {
+        let val = tree.get(&format!("key-{:04}", i)).unwrap();
+        assert_eq!(val.as_deref(), Some(&"original-value".to_string()));
+    }
 }
