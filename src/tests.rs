@@ -259,6 +259,82 @@ fn boundary_deletions() -> io::Result<()> {
 }
 
 #[test]
+fn blobs_and_page_boundaries() {
+    use rand::RngCore;
+
+    // 1. Setup
+    let file = tempfile::NamedTempFile::new().unwrap();
+    let path = file.path().to_owned();
+    
+    // We use Vec<u8> explicitly to represent "Blobs"
+    let mut tree: MerkleSearchTree<String, Vec<u8>> = MerkleSearchTree::open(&path).unwrap();
+    let mut rng = StdRng::seed_from_u64(999);
+
+    // 2. Prepare Blob Data
+    
+    // Blob A: Small (Fits comfortably in one page)
+    let mut blob_small = vec![0u8; 100];
+    rng.fill_bytes(&mut blob_small);
+
+    // Blob B: Edge Case (Just enough to likely trigger page alignment logic)
+    // Node overhead is small, so ~3800 bytes might push the total Node size near 4096.
+    let mut blob_boundary = vec![0u8; 3800];
+    rng.fill_bytes(&mut blob_boundary);
+
+    // Blob C: Large (Larger than PAGE_SIZE=4096, forces multi-page write)
+    // 64KB spans ~16 pages.
+    let mut blob_large = vec![0u8; 64 * 1024]; 
+    rng.fill_bytes(&mut blob_large);
+
+    // Blob D: Specific Patterns (All zeros, All ones) to catch simple encoding bugs
+    let blob_zeros = vec![0u8; 2048];
+    let blob_ones = vec![255u8; 2048];
+
+    // 3. Insert Blobs
+    tree.insert("small".to_string(), blob_small.clone()).unwrap();
+    tree.insert("boundary".to_string(), blob_boundary.clone()).unwrap();
+    tree.insert("large".to_string(), blob_large.clone()).unwrap();
+    tree.insert("zeros".to_string(), blob_zeros.clone()).unwrap();
+    tree.insert("ones".to_string(), blob_ones.clone()).unwrap();
+
+    // 4. Verify In-Memory (Hot Cache)
+    assert_eq!(tree.get("small").unwrap().as_deref(), Some(&blob_small));
+    assert_eq!(tree.get("boundary").unwrap().as_deref(), Some(&blob_boundary));
+    assert_eq!(tree.get("large").unwrap().as_deref(), Some(&blob_large));
+    
+    // 5. Commit and Re-open (Cold Read from Disk)
+    tree.commit().unwrap();
+    drop(tree); // Force close file handle
+
+    let tree_loaded: MerkleSearchTree<String, Vec<u8>> = MerkleSearchTree::open(&path).unwrap();
+
+    // Verify Small
+    assert_eq!(
+        tree_loaded.get("small").unwrap().as_deref(), 
+        Some(&blob_small), 
+        "Failed to retrieve small blob"
+    );
+
+    // Verify Boundary (Did page padding logic corrupt it?)
+    assert_eq!(
+        tree_loaded.get("boundary").unwrap().as_deref(), 
+        Some(&blob_boundary), 
+        "Failed to retrieve page-boundary sized blob"
+    );
+
+    // Verify Large (Did multi-page read/write work?)
+    assert_eq!(
+        tree_loaded.get("large").unwrap().as_deref(), 
+        Some(&blob_large), 
+        "Failed to retrieve large blob > PAGE_SIZE"
+    );
+
+    // Verify Binary patterns
+    assert_eq!(tree_loaded.get("zeros").unwrap().as_deref(), Some(&blob_zeros));
+    assert_eq!(tree_loaded.get("ones").unwrap().as_deref(), Some(&blob_ones));
+}
+
+#[test]
 fn compaction_reduces_file_size_and_preserves_data() {
     use std::fs;
 
