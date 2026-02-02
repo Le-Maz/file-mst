@@ -26,9 +26,11 @@ fn insert_and_contains_basic() {
     let mut tree = MerkleSearchTree::new_temporary().unwrap();
     tree.insert(String::from("A"), "ValA".to_string()).unwrap();
     assert!(tree.contains(&String::from("A")).unwrap());
+    
+    // Fix: dereference the Arc to compare values
     assert_eq!(
-        tree.get(&String::from("A")).unwrap(),
-        Some("ValA".to_string())
+        tree.get(&String::from("A")).unwrap().as_deref(),
+        Some(&"ValA".to_string())
     );
     assert!(!tree.contains(&String::from("B")).unwrap());
 }
@@ -38,15 +40,15 @@ fn insert_update_value() {
     let mut tree = MerkleSearchTree::new_temporary().unwrap();
     tree.insert(String::from("A"), "Val1".to_string()).unwrap();
     assert_eq!(
-        tree.get(&String::from("A")).unwrap(),
-        Some("Val1".to_string())
+        tree.get(&String::from("A")).unwrap().as_deref(),
+        Some(&"Val1".to_string())
     );
 
     // Update value
     tree.insert(String::from("A"), "Val2".to_string()).unwrap();
     assert_eq!(
-        tree.get(&String::from("A")).unwrap(),
-        Some("Val2".to_string())
+        tree.get(&String::from("A")).unwrap().as_deref(),
+        Some(&"Val2".to_string())
     );
 }
 
@@ -81,8 +83,8 @@ fn ordering_and_traversal() {
     for &k in &keys {
         assert!(tree.contains(&String::from(k)).unwrap());
         assert_eq!(
-            tree.get(&String::from(k)).unwrap(),
-            Some(format!("v-{}", k))
+            tree.get(&String::from(k)).unwrap().as_deref(),
+            Some(&format!("v-{}", k))
         );
     }
     assert!(!tree.contains(&String::from("Z")).unwrap());
@@ -147,7 +149,8 @@ fn large_scale_persistence() {
 
     for (i, k) in keys.iter().enumerate() {
         let val = loaded_tree.get(k).unwrap();
-        assert_eq!(val, Some(i as i32), "Incorrect value for key {}", k);
+        // Fix: Compare Option<&i32> with Option<&i32>
+        assert_eq!(val.as_deref(), Some(&(i as i32)), "Incorrect value for key {}", k);
     }
     assert!(!loaded_tree.contains(&String::from("non-existent")).unwrap());
 }
@@ -174,7 +177,8 @@ fn exhaustive_deletion() -> io::Result<()> {
             assert!(!exists, "Deleted key {} still exists", i);
         } else {
             assert!(exists, "Key {} should still exist", i);
-            assert_eq!(tree.get(&keys[i])?, Some(keys[i].clone()));
+            // Fix: handle Arc return
+            assert_eq!(tree.get(&keys[i])?.as_deref(), Some(&keys[i]));
         }
     }
 
@@ -195,7 +199,7 @@ fn exhaustive_deletion() -> io::Result<()> {
     assert!(!tree.contains("key-0001")?);
 
     tree.insert(String::from("resurrected"), "alive".to_string())?;
-    assert_eq!(tree.get("resurrected")?, Some("alive".to_string()));
+    assert_eq!(tree.get("resurrected")?.as_deref(), Some(&"alive".to_string()));
 
     Ok(())
 }
@@ -218,12 +222,12 @@ fn interleaved_operations() -> io::Result<()> {
             } else {
                 tree.insert(key_str.clone(), val)?;
                 active_keys.insert(key_str.clone(), val);
-                assert_eq!(tree.get(&key_str)?, Some(val));
+                assert_eq!(tree.get(&key_str)?.as_deref(), Some(&val));
             }
         } else {
             tree.insert(key_str.clone(), val)?;
             active_keys.insert(key_str.clone(), val);
-            assert_eq!(tree.get(&key_str)?, Some(val));
+            assert_eq!(tree.get(&key_str)?.as_deref(), Some(&val));
         }
 
         if i % 100 == 0 {
@@ -232,7 +236,7 @@ fn interleaved_operations() -> io::Result<()> {
     }
 
     for (k, v) in active_keys {
-        assert_eq!(tree.get(&k)?, Some(v));
+        assert_eq!(tree.get(&k)?.as_deref(), Some(&v));
     }
 
     Ok(())

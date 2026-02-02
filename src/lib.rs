@@ -9,7 +9,7 @@ mod benches;
 #[cfg(test)]
 mod tests;
 
-use std::borrow::{Borrow, Cow};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Read, Seek, SeekFrom, Write};
@@ -20,28 +20,13 @@ use serde::{Deserialize, Serialize};
 
 const PAGE_SIZE: u64 = 4096;
 
-/// A trait for types that can serve as keys in a Merkle Search Tree.
-pub trait MerkleKey: Ord + Clone + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {
-    fn encode(&self) -> Cow<'_, [u8]>;
-}
+/// A trait for types that can serve as keys.
+pub trait MerkleKey: Ord + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
+impl<T> MerkleKey for T where T: Ord + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
 
-/// A trait for types that can serve as values. They must be cloneable and serializable.
-pub trait MerkleValue: Clone + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
-impl<T> MerkleValue for T where T: Clone + std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
-
-impl MerkleKey for String {
-    #[inline]
-    fn encode(&self) -> Cow<'_, [u8]> {
-        self.as_bytes().into()
-    }
-}
-
-impl MerkleKey for Vec<u8> {
-    #[inline]
-    fn encode(&self) -> Cow<'_, [u8]> {
-        self.as_slice().into()
-    }
-}
+/// A trait for types that can serve as values.
+pub trait MerkleValue: std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
+impl<T> MerkleValue for T where T: std::fmt::Debug + Serialize + for<'a> Deserialize<'a> {}
 
 pub type Hash = [u8; 32];
 type NodeId = u64;
@@ -91,10 +76,12 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
     /// Inserts a key-value pair into the tree, modifying it in-place.
     pub fn insert(&mut self, key: K, value: V) -> io::Result<()> {
         let key_arc = Arc::new(key);
+        let val_arc = Arc::new(value);
+
         let root_node = self.resolve_link(&self.root)?;
 
         let target_level = Node::<K, V>::calc_level(key_arc.as_ref());
-        let new_root_node = root_node.put(key_arc, value, target_level, &self.store)?;
+        let new_root_node = root_node.put(key_arc, val_arc, target_level, &self.store)?;
 
         self.root = Link::Loaded(new_root_node);
         Ok(())
@@ -111,7 +98,7 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
     }
 
     /// Retrieves a value by key. Returns None if the key does not exist.
-    pub fn get<Q>(&self, key: &Q) -> io::Result<Option<V>>
+    pub fn get<Q>(&self, key: &Q) -> io::Result<Option<Arc<V>>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -143,7 +130,6 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
         Ok(())
     }
 
-    /// Persists any dirty nodes to disk and updates the root pointer.
     pub fn flush(&mut self) -> io::Result<(u64, Hash)> {
         let (offset, hash) = self.flush_recursive(&self.root)?;
         self.store.flush()?;
@@ -197,10 +183,22 @@ impl<K: MerkleKey, V: MerkleValue> MerkleSearchTree<K, V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum Link<K: MerkleKey, V: MerkleValue> {
     Disk { offset: NodeId, hash: Hash },
     Loaded(Arc<Node<K, V>>),
+}
+
+impl<K: MerkleKey, V: MerkleValue> Clone for Link<K, V> {
+    fn clone(&self) -> Self {
+        match self {
+            Link::Disk { offset, hash } => Link::Disk {
+                offset: *offset,
+                hash: *hash,
+            },
+            Link::Loaded(node) => Link::Loaded(node.clone()),
+        }
+    }
 }
 
 impl<K: MerkleKey, V: MerkleValue> Link<K, V> {
@@ -269,7 +267,8 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
     }
 
     fn write_node(&self, node: &Node<K, V>) -> io::Result<NodeId> {
-        let disk_node = node.to_disk();
+        let disk_node = node.as_disk_ref();
+
         let data = postcard::to_extend(&disk_node, Vec::with_capacity(4096))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
@@ -297,7 +296,7 @@ impl<K: MerkleKey, V: MerkleValue> Store<K, V> {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct DiskNode<K, V> {
     level: u32,
     keys: Vec<K>,
@@ -306,13 +305,34 @@ struct DiskNode<K, V> {
     hash: Hash,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize)]
+struct DiskNodeRef<'a, K, V> {
+    level: u32,
+    keys: &'a [Arc<K>],
+    values: &'a [Arc<V>],
+    children: Vec<(NodeId, Hash)>,
+    hash: Hash,
+}
+
+#[derive(Debug)]
 struct Node<K: MerkleKey, V: MerkleValue> {
     level: u32,
     keys: Vec<Arc<K>>,
-    values: Vec<V>,
+    values: Vec<Arc<V>>,
     children: Vec<Link<K, V>>,
     hash: Hash,
+}
+
+impl<K: MerkleKey, V: MerkleValue> Clone for Node<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            level: self.level,
+            keys: self.keys.clone(),
+            values: self.values.clone(),
+            children: self.children.clone(),
+            hash: self.hash,
+        }
+    }
 }
 
 impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
@@ -328,7 +348,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         node
     }
 
-    fn to_disk(&self) -> DiskNode<K, V> {
+    fn as_disk_ref(&self) -> DiskNodeRef<'_, K, V> {
         let children_meta = self
             .children
             .iter()
@@ -340,10 +360,10 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
             })
             .collect();
 
-        DiskNode {
+        DiskNodeRef {
             level: self.level,
-            keys: self.keys.iter().map(|k| k.as_ref().clone()).collect(),
-            values: self.values.clone(),
+            keys: &self.keys,
+            values: &self.values,
             children: children_meta,
             hash: self.hash,
         }
@@ -357,11 +377,12 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
             .collect();
 
         let keys = disk.keys.into_iter().map(Arc::new).collect();
+        let values = disk.values.into_iter().map(Arc::new).collect();
 
         Self {
             level: disk.level,
             keys,
-            values: disk.values,
+            values,
             children,
             hash: disk.hash,
         }
@@ -369,7 +390,9 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
 
     fn calc_level(key: &K) -> u32 {
         let mut h = blake3::Hasher::new();
-        h.update(&key.encode());
+        let key_bytes =
+            postcard::to_extend(key, Vec::new()).expect("Failed to serialize key for level calc");
+        h.update(&key_bytes);
         let hash = h.finalize();
         let bytes = hash.as_bytes();
         let mut level = 0;
@@ -399,12 +422,11 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         for (i, child) in self.children.iter().enumerate() {
             h.update(&child.hash());
             if i < self.keys.len() {
-                // Hash Key
-                let k_bytes = self.keys[i].encode();
+                let k_bytes = postcard::to_extend(&self.keys[i], Vec::new())
+                    .expect("Failed to serialize key for rehash");
                 h.update(&(k_bytes.len() as u64).to_le_bytes());
                 h.update(&k_bytes);
 
-                // Hash Value
                 let v_bytes = postcard::to_extend(&self.values[i], Vec::with_capacity(4096))
                     .expect("Failed to serialize value for hashing");
                 h.update(&(v_bytes.len() as u64).to_le_bytes());
@@ -437,7 +459,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
         }
     }
 
-    fn get<Q>(&self, key: &Q, store: &Store<K, V>) -> io::Result<Option<V>>
+    fn get<Q>(&self, key: &Q, store: &Store<K, V>) -> io::Result<Option<Arc<V>>>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -463,7 +485,7 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
     fn put(
         &self,
         key: Arc<K>,
-        value: V,
+        value: Arc<V>,
         key_level: u32,
         store: &Arc<Store<K, V>>,
     ) -> io::Result<Arc<Node<K, V>>> {
@@ -487,7 +509,6 @@ impl<K: MerkleKey, V: MerkleValue> Node<K, V> {
                 .binary_search_by(|probe| probe.as_ref().cmp(&key))
             {
                 Ok(idx) => {
-                    // Update existing value
                     new_node.values[idx] = value;
                     new_node.rehash();
                     return Ok(Arc::new(new_node));
